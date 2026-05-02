@@ -1,0 +1,11 @@
+[package]
+name = "cm-graph"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cm-core = { path = "../cm-core" }
+petgraph = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "cm-ingest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cm-core = { path = "../cm-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+petgraph = { workspace = true }
+reqwest = { version = "0.12", features = ["stream"] }
+flate2 = "1"
+tar = "0.4"
+csv = "1"
+bincode = "1"
+futures = "0.3.32"
