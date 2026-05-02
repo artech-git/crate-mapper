@@ -4,6 +4,41 @@ use tracing::info;
 use futures::stream::StreamExt;
 
 const DUMP_URL: &str = "https://static.crates.io/db-dump.tar.gz";
+// Conservative lower bound: the real dump is ~1 GB compressed; anything under
+// 300 MB is definitely a partial or wrong file.
+const MIN_VALID_BYTES: u64 = 300 * 1024 * 1024;
+
+/// Returns true when the dump file looks structurally sound.
+///
+/// Two checks are performed, both cheap:
+///   1. File size must exceed MIN_VALID_BYTES.
+///   2. The file must open as a valid gzip stream whose first tar entry header
+///      can be read without error (decompresses only the first ~512 bytes).
+pub fn is_dump_valid(dump_path: &Path) -> bool {
+    let size = match std::fs::metadata(dump_path) {
+        Ok(m) => m.len(),
+        Err(_) => return false,
+    };
+    if size < MIN_VALID_BYTES {
+        info!(
+            "Dump file is only {:.1} MB (< {:.0} MB minimum), treating as incomplete",
+            size as f64 / 1_048_576.0,
+            MIN_VALID_BYTES as f64 / 1_048_576.0,
+        );
+        return false;
+    }
+
+    let file = match std::fs::File::open(dump_path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    match archive.entries() {
+        Ok(mut entries) => entries.next().map_or(false, |e| e.is_ok()),
+        Err(_) => false,
+    }
+}
 
 pub async fn download_dump(data_dir: &Path) -> Result<std::path::PathBuf> {
     let dump_path = data_dir.join("db-dump.tar.gz");
@@ -12,8 +47,12 @@ pub async fn download_dump(data_dir: &Path) -> Result<std::path::PathBuf> {
         let metadata = std::fs::metadata(&dump_path)?;
         let age = metadata.modified()?.elapsed().unwrap_or_default();
         if age < std::time::Duration::from_secs(24 * 60 * 60) {
-            info!("DB dump is fresh ({}h old), skipping download", age.as_secs() / 3600);
-            return Ok(dump_path);
+            if is_dump_valid(&dump_path) {
+                info!("DB dump is fresh ({}h old) and valid, skipping download", age.as_secs() / 3600);
+                return Ok(dump_path);
+            }
+            info!("DB dump is fresh but failed validation — discarding and re-downloading");
+            std::fs::remove_file(&dump_path).context("Failed to remove invalid dump")?;
         }
     }
 

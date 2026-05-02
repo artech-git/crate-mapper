@@ -100,11 +100,17 @@ pub fn build_graph(dump: ParsedDump) -> Result<BuiltGraph> {
 pub fn save_snapshot(built: &BuiltGraph, path: &Path) -> Result<()> {
     info!("Saving graph snapshot to {}", path.display());
     let encoded = bincode::serialize(&(&built.graph, &built.name_index))?;
-    std::fs::write(path, &encoded)?;
-    info!(
-        "Snapshot saved: {:.1} MB",
-        encoded.len() as f64 / 1_048_576.0
+
+    // Write to a sibling .tmp file first, then rename into place atomically.
+    // A crash or kill between write and rename leaves the previous snapshot (or
+    // no file) intact — the .tmp is never mistaken for a valid snapshot.
+    let tmp_path = path.with_file_name(
+        format!("{}.tmp", path.file_name().unwrap_or_default().to_string_lossy()),
     );
+    std::fs::write(&tmp_path, &encoded)?;
+    std::fs::rename(&tmp_path, path)?;
+
+    info!("Snapshot saved: {:.1} MB", encoded.len() as f64 / 1_048_576.0);
     Ok(())
 }
 
@@ -112,6 +118,13 @@ pub fn load_snapshot(path: &Path) -> Result<BuiltGraph> {
     info!("Loading graph snapshot from {}", path.display());
     let data = std::fs::read(path)?;
     let (graph, name_index): (CrateGraph, NameIndex) = bincode::deserialize(&data)?;
+
+    // A zero-node graph means the file deserialized without a hard error but is
+    // structurally empty — treat it as corrupt so the caller rebuilds.
+    if graph.node_count() == 0 {
+        anyhow::bail!("snapshot is empty (0 nodes) — likely corrupt or truncated");
+    }
+
     info!(
         "Snapshot loaded: {} nodes, {} edges",
         graph.node_count(),
